@@ -16,7 +16,8 @@
 2. Salin **Bagian A (Konteks Induk)** ke `CLAUDE.md` / `AGENTS.md` di root repo baru, atau tempel
    sebagai pesan pertama sesi AI coding Anda. Konteks ini berlaku untuk **semua** tahap.
 3. Jalankan **Bagian B** tahap demi tahap. Setiap tahap punya: *Tujuan*, *Prompt* (blok siap
-   salin), *Deliverable*, dan *Gerbang Lulus (Definition of Done)*.
+   salin), *Deliverable*, dan *Gerbang Lulus (Definition of Done)*. Urutan:
+   0 → 1 → 2 → **2A (Disk Manager)** → 3 → 4 → 5 → **5A (Image Manager)** → 6 → … → 13.
 4. **Jangan lanjut ke tahap berikutnya** sebelum gerbang lulus terpenuhi. Setelah tiap tahap,
    jalankan **Prompt Review Loop** (Bagian C.1) sampai tidak ada temuan kritis/tinggi.
 5. Tahap 0 adalah *spike* verifikasi. Hasilnya (ADR) boleh mengubah keputusan di tahap lain —
@@ -83,12 +84,34 @@ dalam keamanan, kecepatan, kemudahan, dan observabilitas.
 6. Lisensi: setiap klien tetap butuh lisensi Windows yang sah. Produk tidak boleh memuat
    mekanisme bypass aktivasi. iPXE/shim berlisensi GPL — sertakan source offer & notice.
 
+# PRINSIP KUSTOMISASI PENUH (berlaku untuk SEMUA fitur, bukan hanya disk)
+1. Tidak ada keputusan "auto" yang diterapkan diam-diam. Deteksi otomatis hanya mengisi
+   SARAN / nilai awal yang terlihat; admin bisa mengubah semuanya sebelum menekan "Terapkan".
+   Setiap fitur otomatis (auto-approve klien, auto-cleanup, auto-merge, auto-regenerasi,
+   pemilihan binary boot, dll.) punya saklar ON/OFF sendiri dan nilai default terdokumentasi.
+2. Pewarisan pengaturan: Global -> Grup klien -> Klien individual (plus per image / per game
+   disk / per revisi bila relevan). Setiap field menampilkan sumber nilainya (mis. "diwarisi
+   dari Grup Warnet-A") dan tombol "Kembalikan ke warisan".
+3. Dua mode tampilan: Sederhana (field utama) dan Lanjutan (semua parameter teknis: ukuran
+   blok, parameter iSCSI, timeout, retry, port, interval, prioritas I/O, dll.). Tidak ada
+   parameter yang di-hardcode bila aman untuk diubah; yang memang tidak boleh diubah wajib
+   dijelaskan alasannya di UI.
+4. Setiap input punya satuan jelas (GB/MB/ms/%), batas min/maks, validasi realtime, dan
+   penjelasan singkat "apa efeknya". Error memblok; peringatan bisa di-override dengan alasan
+   tertulis yang masuk audit log.
+5. Alur perubahan: Draft -> Tinjau diff & dampak -> Terapkan (sekarang / terjadwal / saat
+   service restart) -> Riwayat & rollback konfigurasi. Semua perubahan tercatat di audit log.
+6. Preset/template hanya titik awal: bisa disimpan, diedit, diekspor/impor (JSON), dan tidak
+   pernah diterapkan tanpa persetujuan admin.
+
 # ARSITEKTUR TINGKAT TINGGI
   [Server Windows]
     superiorzboot-server (Windows Service, SYSTEM)
       ├─ boot:   proxyDHCP(67/4011) + TFTP(69) + HTTP boot(axum) + iPXE script generator
       ├─ storage: VHDX engine (base -> revisions -> per-client personalization -> writeback)
-      │           + RAM read cache (ARC) + SSD tier, I/O dengan IOCP / overlapped
+      │           + RAM cache per pool (Image/Game/Writeback) + SSD cache tier, IOCP/overlapped
+      ├─ diskmgr: peran disk manual (Image Disk, Game Disk, Writeback Disk, SSD Cache, Backup),
+      │           pool, kuota, kebijakan — semua dikonfigurasi admin, tanpa auto-assign
       ├─ iscsi:  iSCSI target RFC 7143 (multi-LUN: OS disk, game disk, data disk)
       ├─ control: gRPC (tonic) over mTLS untuk agent klien; QUIC (quinn) untuk remote desktop
       ├─ telemetry: ingest metrik, ring buffer + SQLite (downsampling), alert engine
@@ -121,6 +144,7 @@ dalam keamanan, kecepatan, kemudahan, dan observabilitas.
     srb-common     tipe bersama, config, error, protokol (proto/)
     srb-vhdx       parser & writer VHDX + differencing chain
     srb-storage    layering, cache RAM/SSD, writeback, snapshot/revision
+    srb-diskmgr    inventaris disk, peran & pool disk, kuota, kebijakan cache, job pemindahan
     srb-iscsi      iSCSI target
     srb-boot       proxyDHCP, TFTP, HTTP boot, iPXE script, manajemen binary boot signed
     srb-control    gRPC service, enrollment, PKI internal
@@ -163,6 +187,9 @@ bukan perkiraan). 4) Gerbang lulus: centang per item, sertakan bukti. 5) Risiko 
 | Keamanan Windows | VBS, HVCI (Memory Integrity), TPM 2.0, Credential Guard, LSA Protection tetap ON di image |
 | Anti-cheat | Lingkungan sah untuk Vanguard, EAC, BattlEye, FACEIT, ACE, Javelin — dengan matriks uji |
 | GPU | Satu VHDX untuk NVIDIA + AMD (+ iGPU Intel opsional), profil hardware per tipe PC |
+| Disk & Cache | Disk Manager manual: Image Disk, Game Disk, Writeback Disk, SSD Cache; RAM cache per pool diatur sendiri (GB) |
+| Image | Image Manager lengkap: ukuran, format, cache, boot, disk tambahan, akses, revisi — semua bisa diedit |
+| Kustomisasi | Tanpa auto diam-diam; pewarisan Global -> Grup -> Klien, mode Sederhana/Lanjutan, draft + rollback |
 | Update image | Versioning revisi + Super User tanpa harus mematikan klien lain; commit/discard/rollback/canary |
 | Monitoring | Metrik realtime per-klien yang bisa dicentang (kumpulkan/tampilkan), alert, histori |
 | Remote | View/control latensi rendah (target < 50 ms LAN, 1080p60), wall view semua klien, file transfer |
@@ -208,8 +235,12 @@ Verifikasi dan dokumentasikan dengan sumber resmi + uji nyata:
    boot di dua mesin berbeda, ukur waktu PnP enumerasi pertama vs berikutnya, dan cek konflik
    panel/service vendor.
 9. Remote capture saat game dengan anti-cheat berjalan: apa yang diblok, apa yang diizinkan.
+10. Writeback/cache di disk lokal klien (fitur populer di solusi diskless lama): apakah ada
+    jalur tanpa driver kernel? Jika butuh filter driver, catat syarat signing (attestation/
+    WHQL, HVCI) dan putuskan: dikerjakan, ditunda, atau tidak. Ukur juga overhead RAM cache
+    server per GB (metadata) untuk ditampilkan jujur di Disk Manager.
 
-Output: ADR-0001..ADR-0009, tabel "asumsi -> terbukti/gagal -> keputusan", dan daftar perubahan
+Output: ADR-0001..ADR-0010, tabel "asumsi -> terbukti/gagal -> keputusan", dan daftar perubahan
 yang perlu diterapkan ke rencana tahap 1-13.
 ```
 
@@ -268,11 +299,14 @@ Kerjakan Tahap 2: srb-vhdx dan srb-storage.
 2. srb-storage: rantai layer per klien:
      Base (read-only) -> Revision N (read-only) -> Personalization klien (persisten, kecil)
      -> Writeback (volatile per boot, atau "persist" bila admin mengizinkan)
-   - Writeback disimpan di server (SSD tier), dibuang saat klien reboot (default) atau
-     dipertahankan per kebijakan. Kuota per klien + peringatan.
-   - Read cache RAM global dengan algoritma ARC/2Q, ukuran bisa diatur; prefetch pola boot
-     (rekam urutan blok saat boot pertama -> preload saat boot storm).
-   - SSD cache tier opsional untuk image di HDD.
+   - Writeback disimpan di Writeback Disk yang dipilih admin, dibuang saat klien reboot
+     (default) atau dipertahankan per kebijakan. Kuota per klien + peringatan.
+   - RAM cache per pool (Image / Game / Writeback) dengan algoritma yang bisa dipilih
+     (ARC/LRU/2Q/LFU); prefetch pola boot (rekam urutan blok saat boot pertama -> preload
+     saat boot storm). Engine hanya MENERIMA parameter — tidak ada ukuran/kebijakan yang
+     di-hardcode; semua nilai datang dari konfigurasi Disk Manager (Tahap 2A) dan bisa
+     diubah saat runtime (hot-apply) tanpa memutus klien.
+   - SSD cache tier opsional untuk image/game disk di HDD.
    - I/O: unbuffered/overlapped (IOCP) untuk throughput; alignment 4K.
 3. Operasi image: create base dari VHDX/VHD/ISO-installed, clone, compact, merge revisi
    (offline, tanpa mengganggu klien yang masih memakai revisi lama — copy-on-write).
@@ -285,6 +319,114 @@ Kerjakan Tahap 2: srb-vhdx dan srb-storage.
 - [ ] VHDX hasil tulis kita lolos `Mount-VHD` + `chkdsk` tanpa error; VHDX Hyper-V terbaca benar.
 - [ ] Property test 1 juta operasi acak tanpa selisih terhadap model.
 - [ ] Benchmark: baca sekuensial dari cache RAM mendekati batas memori; dari NVMe >= 80% kecepatan raw disk.
+
+---
+
+### Tahap 2A — Disk Manager: Image Disk, Game Disk, Writeback, SSD Cache & RAM Cache (kustomisasi penuh)
+
+**Tujuan:** admin membagi sendiri disk server ke peran-perannya dan mengatur ukuran, kuota,
+serta RAM cache masing-masing — tidak ada yang ditetapkan otomatis.
+
+```text
+Kerjakan Tahap 2A: crate srb-diskmgr + halaman "Disk Manager" di console. Ikuti PRINSIP
+KUSTOMISASI PENUH: sistem TIDAK PERNAH menetapkan peran disk, ukuran, kuota, atau RAM cache
+secara otomatis. Deteksi hanya untuk informasi & saran; admin yang memutuskan dan menekan
+"Terapkan".
+
+1. Inventaris disk server (read-only; interval refresh bisa diatur, plus tombol refresh):
+   disk fisik & volume: model, serial, bus (NVMe/SATA/SAS/USB), kapasitas, ruang kosong,
+   sistem file, ukuran cluster, sektor logis/fisik, TRIM, kesehatan SMART, suhu, jam nyala,
+   sisa umur SSD (via Windows Storage API: MSFT_PhysicalDisk, StorageReliabilityCounter).
+   Tandai disk sistem Windows server; peran berat di disk sistem butuh konfirmasi khusus.
+
+2. Peran disk — ditetapkan MANUAL per volume ATAU per folder di dalam volume:
+   - Image Disk     : image OS (base + revisi + layer personalisasi klien).
+   - Game Disk      : VHDX game disk (di-attach ke klien sebagai LUN tambahan).
+   - Writeback Disk : file writeback per klien.
+   - SSD Cache Disk : tier cache untuk mempercepat Image/Game Disk yang ada di HDD.
+   - Backup/Arsip   : tujuan backup image, revisi lama, ekspor konfigurasi.
+   - Tidak dipakai.
+   Satu volume boleh memegang lebih dari satu peran hanya jika admin mencentang
+   "Izinkan peran ganda" (tampilkan peringatan dampak performa). Beberapa volume dengan peran
+   sama membentuk POOL dengan kebijakan pilihan admin: manual per item, round-robin,
+   paling sedikit terpakai, isi-sampai-penuh, atau dipetakan per grup klien.
+
+3. Pengaturan per peran (semua field bisa diedit; default hanya titik awal):
+   Image Disk:
+     - path, kuota total pool, batas ukuran per image, ruang minimum yang disisakan (GB/%),
+     - format VHDX baru: dynamic/fixed, block size (1/2/8/32/256 MB), sektor logis 512/4096,
+     - batas jumlah revisi tersimpan sebelum peringatan.
+   Game Disk:
+     - path, kuota, ukuran tiap game disk, jumlah game disk, huruf drive di klien (mis. G:, H:),
+       nomor LUN, mode akses klien (read-only + writeback / read-only murni),
+       grup klien yang boleh memakai,
+     - mode update: via Super User / server-side update / keduanya.
+   Writeback Disk:
+     - path per pool; lokasi writeback per grup/per klien (pilih volume tertentu),
+     - kuota per klien (GB), ambang peringatan (%), aksi saat penuh: hanya peringatan /
+       tolak tulis baru + pesan di klien / jadwalkan restart dengan hitung mundur,
+     - kebijakan umur: buang saat reboot / simpan sampai dihapus admin / simpan N hari,
+     - prealokasi (ya/tidak, ukuran awal), block size file writeback,
+     - jadwal pembersihan (bisa dimatikan) + tombol bersihkan manual per klien/grup.
+     - Opsi "Writeback di disk lokal klien" hanya aktif jika ADR Tahap 0 menemukan jalur sah
+       (butuh filter driver bertanda tangan Microsoft & HVCI-compatible). Jika belum ada,
+       tampilkan "tidak tersedia" beserta alasannya — jangan dipalsukan.
+   SSD Cache Disk:
+     - volume sumber yang dipercepat, ukuran cache (GB), mode (read cache / write-through),
+       pin image/revisi/game disk tertentu agar selalu di SSD, warm-up manual atau terjadwal.
+
+4. RAM Cache — sepenuhnya manual, TANPA auto-sizing:
+   - Anggaran RAM total untuk cache (GB/MB). Tampilkan RAM fisik, pemakaian OS & service, dan
+     sisa. Jika melebihi batas aman, tampilkan peringatan tetapi tetap izinkan dengan
+     konfirmasi eksplisit.
+   - Pembagian per pool, setiap angka diisi admin:
+       Image Cache (GB) | Game Cache (GB) | Writeback Cache (GB)
+     Pilihan: pool terpisah (kuota tegas) atau pool bersama dengan batas atas per peran.
+   - Override per image, per revisi, per game disk, dan per grup klien.
+   - Parameter lanjutan: algoritma eviction (ARC/LRU/2Q/LFU), ukuran blok cache (4 KB–1 MB),
+     read-ahead (KB, boleh 0), prefetch profil boot (on/off, jumlah profil disimpan),
+     "Pin ke RAM" (preload image/revisi/game disk tertentu saat service start atau terjadwal),
+     large pages (on/off; butuh SeLockMemoryPrivilege — beri tahu bila tidak tersedia).
+   - Writeback Cache: write-through (aman) atau write-back tertunda dengan interval flush (ms)
+     dan batas dirty data (MB); tampilkan peringatan risiko data hilang saat listrik padam
+     dan anjuran UPS.
+   - Statistik live per pool: terpakai, hit rate, miss, eviction/detik, dirty bytes, latensi,
+     grafik histori; tombol "Kosongkan cache" per pool (dengan konfirmasi).
+
+5. Alur perubahan:
+   - Semua perubahan masuk DRAFT -> layar "Tinjau perubahan": diff lama vs baru, dampak
+     (klien/grup/image terpengaruh), dan apakah butuh klien offline atau restart service.
+   - Penerapan: sekarang (jika bisa hot-apply) / saat service restart / terjadwal.
+   - Error (kuota > ruang kosong, path tidak ada, hak akses kurang) memblok; peringatan
+     (RAM cache besar, peran ganda di HDD) bisa di-override dengan alasan yang masuk audit log.
+   - Riwayat konfigurasi disk + rollback ke versi sebelumnya.
+
+6. Operasi disk (semua butuh konfirmasi; aksi destruktif wajib mengetik serial/nama volume):
+   pindahkan image / game disk / writeback antar volume (copy + verifikasi hash + cutover
+   tanpa mematikan klien yang tidak terdampak), inisialisasi/format volume via Windows Storage
+   API, benchmark disk (sekuensial/acak, QD1/QD32) sebagai bahan keputusan, cek integritas.
+   Semua operasi panjang berjalan sebagai job: progress, ETA, pause/resume/cancel, dan
+   prioritas I/O yang bisa diatur agar tidak mengganggu klien aktif.
+
+7. Profil tata letak disk: simpan/muat/ekspor/impor (JSON), mis. "Warnet 40 PC", "Turnamen".
+   Template bawaan hanya contoh yang wajib ditinjau; tidak pernah diterapkan diam-diam.
+
+8. UI Disk Manager: tab Disk | Peran & Pool | RAM Cache | SSD Cache | Job | Riwayat.
+   Setiap disk fisik digambar sebagai bar kapasitas berwarna per peran (Image/Game/Writeback/
+   Cache/Bebas); klik segmen -> panel pengaturan di kanan. Kartu RAM Cache menampilkan
+   slider + input angka untuk tiap pool beserta total yang tersisa secara realtime.
+
+9. Test: validasi konfigurasi (unit + property), hot-apply ukuran cache naik/turun saat
+   beban, pemindahan writeback saat klien di grup lain aktif, simulasi disk penuh, cancel
+   job di tengah jalan tanpa kerusakan data.
+```
+
+**Gerbang Lulus:**
+
+- [ ] Instalasi baru: tidak ada peran disk yang terisi otomatis; boot klien ditolak dengan pesan jelas sampai admin menetapkan minimal Image Disk + Writeback Disk.
+- [ ] Setiap angka RAM cache yang diisi admin tercermin persis di statistik live (overhead metadata dicatat terpisah).
+- [ ] Mengubah ukuran Game Cache saat 20 klien aktif tidak memutus koneksi klien.
+- [ ] Aksi destruktif tidak bisa dijalankan tanpa mengetik konfirmasi (test UI Playwright).
 
 ---
 
@@ -330,7 +472,8 @@ Kerjakan Tahap 4: srb-boot.
    - Simpan paket shim+iPXE resmi (hasil Tahap 0) sebagai aset ber-hash; verifikasi
      Authenticode/tanda tangan saat startup; tolak binary yang tidak valid.
    - Pilih set binary per klien berdasarkan laporan agent (isi db: CA 2011/2023, versi DBX).
-     Klien baru (belum ada laporan) -> set paling kompatibel.
+     Klien baru (belum ada laporan) -> set paling kompatibel. Pemilihan otomatis ini punya
+     saklar: admin bisa memaksa set binary tertentu per image / grup / klien.
    - DILARANG menyajikan binary yang tidak signed saat klien melaporkan Secure Boot ON.
 4. Generator skrip iPXE dinamis per klien (via HTTP, endpoint ber-token): set initiator-iqn,
    sanboot iscsi:..., fallback & retry, menu boot opsional (normal / super user / safe mode /
@@ -339,9 +482,14 @@ Kerjakan Tahap 4: srb-boot.
    termasuk DHCP option root-path bila didukung NIC.
 6. Legacy BIOS (opsional, Secure Boot tidak berlaku): undionly.kpxe — tandai jelas di UI
    bahwa mode ini TIDAK memenuhi syarat Valorant.
-7. Auto-registrasi klien: MAC baru -> masuk "Pending" -> admin approve (atau auto-approve
-   per subnet) -> diberi nama sesuai pola (mis. PC-{001}) dan grup.
+7. Registrasi klien: MAC baru -> masuk "Pending" -> admin approve manual (default) atau
+   auto-approve per subnet bila diaktifkan admin -> nama sesuai pola yang bisa diedit
+   (mis. PC-{001}) dan grup. Admin juga bisa menambah klien manual (MAC, nama, IP, grup,
+   image, disk tambahan) atau impor massal CSV.
 8. Wake-on-LAN, boot storm control (pacing antrian saat 100+ PC menyala bersamaan).
+9. Semua parameter jaringan & boot bisa diatur di mode Lanjutan: NIC/IP yang di-bind, port,
+   DHCP options, blksize/windowsize TFTP, timeout & retry iPXE, isi menu boot, parameter
+   iSCSI default, batas pacing boot storm.
 ```
 
 **Gerbang Lulus:**
@@ -358,7 +506,8 @@ Kerjakan Tahap 4: srb-boot.
 Kerjakan Tahap 5: srb-image + wizard di console.
 1. Wizard "Buat Image Master": dari PC referensi (upload disk via agent) atau dari instalasi
    baru di VM. Partisi GPT: ESP (FAT32), MSR, Windows (NTFS). Tanpa recovery partition di image.
-2. Persiapan image yang dilakukan otomatis (dengan konfirmasi & log):
+2. Persiapan image sebagai CHECKLIST yang setiap itemnya bisa dicentang/dilewati dan
+   diatur nilainya oleh admin (tampilkan apa yang akan diubah sebelum dijalankan, log hasil):
    - Aktifkan iSCSI boot: layanan msiscsi, iBFT, binding NIC; pastikan driver NIC yang dipakai
      klien terinstal & HVCI-compatible.
    - Keamanan ON: Secure Boot-ready, VBS, HVCI (Memory Integrity), Credential Guard bila
@@ -373,7 +522,8 @@ Kerjakan Tahap 5: srb-image + wizard di console.
    status. Tiap temuan punya tombol "Perbaiki" bila aman otomatis, atau panduan manual.
 4. Personalisasi per-klien sesuai ADR Tahap 0 (mis. layer personalisasi dengan offline
    registry): hostname, IP statis opsional, resolusi default, wallpaper/branding, autologin
-   akun lokal terbatas, pesan selamat datang. Diregenerasi otomatis saat revisi baru.
+   akun lokal terbatas, pesan selamat datang — tiap item bisa diaktifkan/nonaktifkan.
+   Regenerasi layer saat revisi baru: otomatis / manual / terjadwal (pilihan admin).
 5. Game disk & data disk: VHDX terpisah sebagai LUN tambahan; mode "server-side update"
    (server mount revisi baru game disk dan update launcher/game tanpa klien Super User).
 ```
@@ -385,6 +535,61 @@ Kerjakan Tahap 5: srb-image + wizard di console.
 
 ---
 
+### Tahap 5A — Image Manager (OS Image & Game Disk, kustomisasi penuh)
+
+```text
+Kerjakan Tahap 5A: halaman "Image Manager" untuk OS Image, Game Disk, dan Data Disk.
+Ikuti PRINSIP KUSTOMISASI PENUH — setiap parameter bisa diisi/diubah admin.
+
+1. Daftar image dengan kolom yang bisa dipilih tampil/tidak: nama, tipe (OS/Game/Data),
+   OS & build, ukuran virtual / terpakai, lokasi (volume dari Disk Manager), revisi aktif &
+   canary, jumlah klien yang memakai, RAM cache efektif (dan sumbernya: global/override),
+   status Image Doctor, terakhir diubah. Filter, sort, pencarian.
+
+2. Buat image baru — wizard (Sederhana) + semua field (Lanjutan):
+   nama, deskripsi, tipe, ukuran virtual (GB), dynamic/fixed, block size, sektor logis,
+   skema partisi GPT (ukuran ESP/MSR bisa diatur), volume tujuan (pilih dari pool Disk Manager
+   atau tentukan manual). Sumber: kosong / impor VHD/VHDX / upload dari PC referensi via agent /
+   clone image lain / dari template milik admin.
+
+3. Properti image (bisa diedit kapan saja; field yang berdampak ke klien aktif ditandai):
+   - Penyimpanan: volume, pindah lokasi, perbesar ukuran virtual (expand, opsi perluas
+     partisi), compact, konversi dynamic <-> fixed.
+   - Cache: override RAM cache (GB), Pin ke RAM, pin SSD cache, prefetch profil boot.
+   - Boot: label & urutan di menu boot, timeout, mode boot (A/B), set binary Secure Boot
+     (otomatis dari laporan klien ATAU dipaksa manual 2011/2023), parameter iSCSI
+     (MaxBurstLength, FirstBurstLength, MaxRecvDataSegmentLength, digest, CHAP), opsi iPXE.
+   - Disk tambahan: game disk / data disk yang di-attach, nomor LUN, huruf drive, urutan.
+   - Writeback: override kebijakan Disk Manager (lokasi, kuota, umur) khusus image ini.
+   - Akses: grup/klien yang boleh boot, image default per grup, image cadangan (fallback).
+   - Personalisasi: aktif/nonaktif per item; mode regenerasi layer (otomatis/manual/terjadwal).
+
+4. Revisi (terhubung ke Tahap 10): daftar revisi dengan catatan, ukuran, pembuat, tanggal;
+   set aktif, set canary + pilih grup canary, rollback, merge ke base (sekarang/terjadwal),
+   kunci revisi (proteksi dari hapus/merge), ekspor revisi, bandingkan dua revisi, retensi
+   (jumlah revisi disimpan) yang diatur admin.
+
+5. Operasi: mount di server (read-only untuk inspeksi / read-write mode maintenance dengan
+   kunci eksklusif), cek integritas (hash per blok), Image Doctor manual/terjadwal, backup &
+   restore ke volume Backup, duplikasi, hapus (wajib ketik nama image; ditolak bila masih
+   dipakai klien kecuali dipaksa Admin dengan alasan).
+
+6. Assignment massal: pilih banyak klien/grup -> set image default, menu boot multi-image
+   (pilih image saat boot, urutan & timeout diatur), jadwal ganti image (mis. mode turnamen
+   jam 19:00-23:00).
+
+7. Semua aksi panjang (copy, merge, compact, expand, backup) berjalan sebagai job dengan
+   progress, ETA, pause/resume/cancel, dan prioritas I/O yang diatur admin.
+```
+
+**Gerbang Lulus:**
+
+- [ ] Image bisa dibuat dengan setiap kombinasi parameter valid; parameter tidak valid ditolak dengan pesan yang bisa ditindaklanjuti.
+- [ ] Expand/compact/merge yang di-cancel di tengah jalan tidak merusak image.
+- [ ] Override RAM cache per image terbukti mengalahkan nilai global di statistik live.
+
+---
+
 ### Tahap 6 — GPU PnP Multi-Vendor (NVIDIA + AMD dalam 1 VHDX)
 
 ```text
@@ -393,6 +598,7 @@ Kerjakan Tahap 6.
    image via pnputil /add-driver (bukan installer penuh yang saling menghapus). Komponen
    user-mode (panel kontrol vendor, layanan) dipasang terpisah dengan aturan:
    service vendor hanya aktif bila GPU vendor tsb terdeteksi (agent mengatur start type).
+   Aturan ini bisa diubah admin per hardware profile (paksa aktif / paksa nonaktif / otomatis).
 2. Hardware Profiles: setiap kombinasi motherboard+GPU dikenali (hash hardware ID).
    Alur "Pelajari Hardware": admin boot satu klien per tipe hardware dalam Super User ->
    PnP enumerasi tersimpan ke revisi -> klien sejenis berikutnya boot tanpa enumerasi ulang.
@@ -456,12 +662,16 @@ Kerjakan Tahap 8: srb-telemetry + kolektor di agent + UI.
 2. Pengaturan centang dua level dan per grup klien:
    [x] Kumpulkan (bila mati -> agent tidak mengumpulkan sama sekali, hemat & privasi)
    [x] Tampilkan (kolom/kartu di dashboard)
-   Plus interval sampling, retensi histori, dan preset ("Ringan", "Standar", "Lengkap").
+   Plus interval sampling per metrik, retensi histori, ambang warna (hijau/kuning/merah) per
+   metrik, urutan & lebar kolom, dan preset ("Ringan", "Standar", "Lengkap") yang hanya
+   titik awal — admin bisa membuat & menyimpan preset sendiri.
 3. Pipeline: agent batching (protobuf, delta), server ring buffer realtime + SQLite downsampled
    (1s 1 jam, 10s 24 jam, 1m 30 hari). Skala target: 500 klien x 30 metrik @1s tanpa lag UI.
-4. Alert engine: aturan (suhu GPU > 85°C 60 detik, RAM > 95%, klien offline, HVCI off,
-   writeback hampir penuh) -> notifikasi di console, toast Windows, webhook opsional
-   (Telegram/Discord/HTTP) dengan rate limit.
+4. Alert engine: aturan contoh (suhu GPU > 85°C 60 detik, RAM > 95%, klien offline, HVCI off,
+   writeback hampir penuh, RAM cache hit rate rendah, disk server hampir penuh) -> notifikasi
+   di console, toast Windows, webhook opsional (Telegram/Discord/HTTP) dengan rate limit.
+   Semua ambang, durasi, target (grup/klien), kanal, dan jadwal senyap bisa diubah; admin
+   bisa membuat aturan sendiri dan menonaktifkan aturan bawaan.
 5. UI: grid klien (kartu atau tabel), kolom mengikuti centang "Tampilkan", sparkline,
    detail klien dengan grafik histori, filter & sort, heatmap suhu seluruh ruangan (denah
    ruangan drag-and-drop opsional).
@@ -485,7 +695,8 @@ Kerjakan Tahap 9: srb-remote + session-helper + viewer di console.
    Secure desktop (UAC, Ctrl+Alt+Del, layar login): helper berjalan di desktop Winlogon dengan
    hak SYSTEM sesuai pola resmi; SAS via SendSAS (policy SoftwareSASGeneration).
 3. Encode: H.264/HEVC/AV1 hardware via Media Foundation (NVENC/AMF/QSV) + fallback software;
-   bitrate adaptif; target < 50 ms glass-to-glass di LAN 1080p60.
+   bitrate adaptif; target < 50 ms glass-to-glass di LAN 1080p60. Admin bisa mengatur codec,
+   resolusi, fps, bitrate (adaptif/tetap), kualitas, dan fps Wall View per grup atau per sesi.
 4. Transport: QUIC (quinn) mTLS, stream terpisah untuk video/input/clipboard/file.
 5. Fitur: clipboard sync (teks), file transfer (drag-drop) dengan scan Defender sisi klien,
    chat/pesan, blank screen klien saat admin bekerja (opsional, dengan indikator), rekam sesi
@@ -528,6 +739,9 @@ Kerjakan Tahap 10.
    N revisi, backup/ekspor image.
 5. Pengaman: timeout pengingat bila Super User aktif terlalu lama, auto-snapshot sebelum commit,
    pemeriksaan Image Doctor wajib sebelum commit (bisa override oleh Admin dengan alasan).
+6. Semua bisa diatur admin: durasi timeout pengingat, wajib PIN/2FA atau tidak, ukuran
+   maksimal & lokasi Revisi Pending (volume dari Disk Manager), grup canary, durasi pantau
+   canary, kriteria lolos canary, jadwal rollout, dan retensi revisi.
 ```
 
 **Gerbang Lulus:**
@@ -545,10 +759,15 @@ Kerjakan Tahap 11: penyempurnaan penuh console (ui/ + apps/server-console).
 1. Design system: token warna (light/dark, aksen bisa diubah), tipografi Segoe UI Variable /
    Inter, spacing 4/8, radius konsisten, ikon Lucide, motion halus (<= 200 ms, hormati
    prefers-reduced-motion), efek Mica Windows 11. Komponen shadcn/ui yang diselaraskan.
-2. Informasi arsitektur (sidebar): Dashboard, Klien, Image & Revisi, Game Disk, Monitoring,
+2. Informasi arsitektur (sidebar): Dashboard, Klien, Image Manager, Disk Manager, Monitoring,
    Remote, Boot & Jaringan, Keamanan, Operator & Audit, Pengaturan.
-3. Pola UX wajib: wizard first-run (pilih NIC, folder storage, impor image, uji boot satu klien
-   dengan checklist Secure Boot/VBS/HVCI), command palette (Ctrl+K), aksi massal (pilih banyak
+   Setiap halaman pengaturan punya: saklar mode Sederhana/Lanjutan, label sumber nilai
+   (Global/Grup/Klien) + "Kembalikan ke warisan", bar "Ada perubahan belum diterapkan"
+   (Tinjau / Buang / Terapkan), dan tautan ke riwayat konfigurasi.
+3. Pola UX wajib: wizard first-run (pilih NIC, tetapkan peran disk & RAM cache secara manual
+   di Disk Manager, buat/impor image, uji boot satu klien dengan checklist Secure Boot/VBS/
+   HVCI; setiap langkah menampilkan saran tetapi admin yang mengisi), command palette
+   (Ctrl+K), aksi massal (pilih banyak
    klien -> restart/shutdown/pesan/Super User), keyboard shortcut, empty state yang mengarahkan,
    toast & undo, konfirmasi berlapis untuk aksi destruktif, status realtime tanpa refresh.
 4. Dashboard: jumlah klien online/offline, throughput server, hit-rate cache, alert aktif,
@@ -682,3 +901,8 @@ langkah diagnosis sementara dengan peringatan jelas.
 | Writeback | Layer tulis per-klien; dibuang saat reboot sehingga image tetap bersih |
 | Revisi | Snapshot image read-only hasil commit Super User; bisa rollback |
 | Super User | Mode klien yang tulisannya masuk ke revisi pending image, untuk instal/update |
+| Image Disk | Volume/folder server yang ditetapkan admin untuk menyimpan image OS & revisinya |
+| Game Disk | VHDX game terpisah yang di-attach ke klien sebagai drive tambahan (mis. G:) |
+| Writeback Disk | Volume server tempat file writeback per klien disimpan |
+| RAM Cache | Cache baca/tulis di RAM server per pool (Image/Game/Writeback), ukurannya diatur admin |
+| SSD Cache | Tier cache di SSD untuk mempercepat image/game disk yang berada di HDD |
