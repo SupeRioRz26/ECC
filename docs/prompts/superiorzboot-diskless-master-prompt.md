@@ -1,4 +1,4 @@
-# NusaBoot — Master Prompt Bertahap: Diskless Server & Client (Rust, Windows 11 x64)
+# SupeRioRzBoot — Master Prompt Bertahap: Diskless Server & Client (Rust, Windows 11 x64)
 
 > Dokumen ini adalah **prompt induk + prompt per tahap** untuk membangun aplikasi diskless boot
 > (kelas CCBoot) berbasis Rust dengan UI/UX modern-minimalis, rantai **Secure Boot penuh tanpa
@@ -6,9 +6,7 @@
 > dengan anti-cheat kernel (Valorant/Vanguard, dll.) bisa berjalan, **GPU PnP multi-vendor NVIDIA +
 > AMD dalam satu VHDX**, **monitoring klien yang bisa dicentang**, **remote view/control**, dan
 > **mode Super User** dengan versioning image. Keluaran tahap terakhir: **`.zip` berisi
-> `NusaBoot-Server.exe` dan `NusaBoot-Client.exe`**.
->
-> Nama produk "NusaBoot" hanya placeholder — ganti bebas.
+> `SupeRioRzBoot-Server.exe` dan `SupeRioRzBoot-Client.exe`**.
 
 ---
 
@@ -32,7 +30,7 @@
 # PERAN
 Anda adalah tim senior gabungan: Rust systems engineer (storage, networking, Windows internals),
 UEFI/Secure Boot engineer, Windows image/deployment engineer, security engineer, dan
-product designer UI/UX. Anda membangun "NusaBoot": platform diskless boot untuk warnet/iCafe,
+product designer UI/UX. Anda membangun "SupeRioRzBoot": platform diskless boot untuk warnet/iCafe,
 lab komputer, dan esports arena, yang targetnya melampaui solusi diskless lama (kelas CCBoot)
 dalam keamanan, kecepatan, kemudahan, dan observabilitas.
 
@@ -87,7 +85,7 @@ dalam keamanan, kecepatan, kemudahan, dan observabilitas.
 
 # ARSITEKTUR TINGKAT TINGGI
   [Server Windows]
-    nusaboot-server (Windows Service, SYSTEM)
+    superiorzboot-server (Windows Service, SYSTEM)
       ├─ boot:   proxyDHCP(67/4011) + TFTP(69) + HTTP boot(axum) + iPXE script generator
       ├─ storage: VHDX engine (base -> revisions -> per-client personalization -> writeback)
       │           + RAM read cache (ARC) + SSD tier, I/O dengan IOCP / overlapped
@@ -95,11 +93,11 @@ dalam keamanan, kecepatan, kemudahan, dan observabilitas.
       ├─ control: gRPC (tonic) over mTLS untuk agent klien; QUIC (quinn) untuk remote desktop
       ├─ telemetry: ingest metrik, ring buffer + SQLite (downsampling), alert engine
       └─ api: IPC lokal (named pipe, ACL admin) untuk console
-    NusaBoot-Server.exe (Tauri 2 console UI) -> berbicara ke service via named pipe
+    SupeRioRzBoot-Server.exe (Tauri 2 console UI) -> berbicara ke service via named pipe
   [Klien]
     Firmware UEFI -> (Mode A/B) -> Windows 11 dari iSCSI LUN
-    nusaboot-agent (Windows Service, SYSTEM) + nusaboot-session-helper (per sesi user,
-      untuk capture layar/input/tray/indikator) — keduanya dari NusaBoot-Client.exe
+    superiorzboot-agent (Windows Service, SYSTEM) + superiorzboot-session-helper (per sesi user,
+      untuk capture layar/input/tray/indikator) — keduanya dari SupeRioRzBoot-Client.exe
 
 # TECH STACK (verifikasi versi terbaru & status maintenance di Tahap 0)
 - Async: tokio. Logging: tracing + tracing-appender (rolling). Error: thiserror/anyhow.
@@ -120,19 +118,19 @@ dalam keamanan, kecepatan, kemudahan, dan observabilitas.
 
 # STRUKTUR REPO (cargo workspace)
   /crates
-    nb-common      tipe bersama, config, error, protokol (proto/)
-    nb-vhdx        parser & writer VHDX + differencing chain
-    nb-storage     layering, cache RAM/SSD, writeback, snapshot/revision
-    nb-iscsi       iSCSI target
-    nb-boot        proxyDHCP, TFTP, HTTP boot, iPXE script, manajemen binary boot signed
-    nb-control     gRPC service, enrollment, PKI internal
-    nb-telemetry   ingest metrik, storage time-series, alert
-    nb-remote      protokol remote desktop (server relay + viewer core)
-    nb-image       tool image: Image Doctor, personalization (offline registry), driver staging
+    srb-common     tipe bersama, config, error, protokol (proto/)
+    srb-vhdx       parser & writer VHDX + differencing chain
+    srb-storage    layering, cache RAM/SSD, writeback, snapshot/revision
+    srb-iscsi      iSCSI target
+    srb-boot       proxyDHCP, TFTP, HTTP boot, iPXE script, manajemen binary boot signed
+    srb-control    gRPC service, enrollment, PKI internal
+    srb-telemetry  ingest metrik, storage time-series, alert
+    srb-remote     protokol remote desktop (server relay + viewer core)
+    srb-image      tool image: Image Doctor, personalization (offline registry), driver staging
   /apps
     server-service binary service
-    server-console Tauri app (UI) -> output NusaBoot-Server.exe (embed service, mode CLI)
-    client-agent   service + session helper -> output NusaBoot-Client.exe
+    server-console Tauri app (UI) -> output SupeRioRzBoot-Server.exe (embed service, mode CLI)
+    client-agent   service + session helper -> output SupeRioRzBoot-Client.exe
   /ui              frontend React untuk console
   /docs/adr        Architecture Decision Records
   /docs/runbooks   panduan operasional
@@ -159,7 +157,7 @@ bukan perkiraan). 4) Gerbang lulus: centang per item, sertakan bukti. 5) Risiko 
 
 ### A.1 Target Keunggulan (benchmark terhadap solusi diskless lama)
 
-| Area | Target NusaBoot |
+| Area | Target SupeRioRzBoot |
 |---|---|
 | Secure Boot | Rantai penuh bertanda tangan Microsoft, tanpa inject sertifikat; deteksi CA 2011/2023 & DBX otomatis |
 | Keamanan Windows | VBS, HVCI (Memory Integrity), TPM 2.0, Credential Guard, LSA Protection tetap ON di image |
@@ -232,12 +230,12 @@ yang perlu diterapkan ke rencana tahap 1-13.
 Kerjakan Tahap 1 sesuai Konteks Induk dan ADR Tahap 0.
 1. Buat cargo workspace sesuai STRUKTUR REPO, toolchain dipin (rust-toolchain.toml), profil
    release: lto="fat", codegen-units=1, panic="abort" untuk service, strip=true.
-2. nb-common: model konfigurasi (serde, schema_version, migrasi), tipe ID (ClientId, ImageId,
+2. srb-common: model konfigurasi (serde, schema_version, migrasi), tipe ID (ClientId, ImageId,
    RevisionId, GroupId), error terpadu, tracing setup (JSON log rolling ke
-   %ProgramData%\NusaBoot\logs).
+   %ProgramData%\SupeRioRzBoot\logs).
 3. server-service: Windows service (windows-service) dengan subcommand CLI:
    `install`, `uninstall`, `start`, `stop`, `run --console` (debug). Graceful shutdown.
-4. IPC console<->service: named pipe dengan ACL hanya Administrators + grup "NusaBoot Operators",
+4. IPC console<->service: named pipe dengan ACL hanya Administrators + grup "SupeRioRzBoot Operators",
    protokol request/response + event stream (prost). Versi protokol dinegosiasi.
 5. SQLite (WAL) dengan migrasi terversi. Tabel awal: clients, groups, images, revisions,
    operators, audit_log (append-only, hash-chain untuk deteksi manipulasi), settings.
@@ -245,8 +243,8 @@ Kerjakan Tahap 1 sesuai Konteks Induk dan ADR Tahap 0.
    (machine scope). Enrollment klien memakai token sekali-pakai -> sertifikat klien.
 7. CI GitHub Actions di windows-latest: fmt, clippy -D warnings, test, cargo-deny (lisensi &
    advisories), build release. Job malam: fuzz.
-8. Skeleton Tauri console (NusaBoot-Server.exe) yang bisa: deteksi service, install service via
-   elevasi UAC, tampilkan status. Skeleton client-agent (NusaBoot-Client.exe) dengan
+8. Skeleton Tauri console (SupeRioRzBoot-Server.exe) yang bisa: deteksi service, install service via
+   elevasi UAC, tampilkan status. Skeleton client-agent (SupeRioRzBoot-Client.exe) dengan
    install/uninstall service.
 ```
 
@@ -261,13 +259,13 @@ Kerjakan Tahap 1 sesuai Konteks Induk dan ADR Tahap 0.
 ### Tahap 2 — Storage Engine: VHDX & Layering
 
 ```text
-Kerjakan Tahap 2: nb-vhdx dan nb-storage.
-1. nb-vhdx: implementasi penuh spesifikasi [MS-VHDX]: header ganda + checksum CRC-32C, region
+Kerjakan Tahap 2: srb-vhdx dan srb-storage.
+1. srb-vhdx: implementasi penuh spesifikasi [MS-VHDX]: header ganda + checksum CRC-32C, region
    table, metadata (block size, logical sector 512/4096, physical sector, parent locator),
    BAT, log replay (wajib untuk crash consistency), dynamic & differencing. Baca DAN tulis.
    Kompatibel 100% dengan Hyper-V/Mount-VHD (VHDX yang kita tulis harus bisa di-mount Windows,
    dan sebaliknya).
-2. nb-storage: rantai layer per klien:
+2. srb-storage: rantai layer per klien:
      Base (read-only) -> Revision N (read-only) -> Personalization klien (persisten, kecil)
      -> Writeback (volatile per boot, atau "persist" bila admin mengizinkan)
    - Writeback disimpan di server (SSD tier), dibuang saat klien reboot (default) atau
@@ -293,7 +291,7 @@ Kerjakan Tahap 2: nb-vhdx dan nb-storage.
 ### Tahap 3 — iSCSI Target
 
 ```text
-Kerjakan Tahap 3: nb-iscsi (RFC 7143).
+Kerjakan Tahap 3: srb-iscsi (RFC 7143).
 1. Login phase lengkap (security negotiation CHAP opsional/mutual CHAP, operational negotiation:
    MaxRecvDataSegmentLength, FirstBurstLength, MaxBurstLength, ImmediateData, InitialR2T,
    HeaderDigest/DataDigest CRC32C), Full Feature Phase, logout, NOP-In/Out keepalive,
@@ -323,7 +321,7 @@ Kerjakan Tahap 3: nb-iscsi (RFC 7143).
 ### Tahap 4 — Network Boot Services (PXE Secure Boot)
 
 ```text
-Kerjakan Tahap 4: nb-boot.
+Kerjakan Tahap 4: srb-boot.
 1. proxyDHCP (port 67/4011) yang TIDAK mengganggu DHCP router yang ada; juga mode DHCP penuh
    opsional (pool, reservasi MAC). Deteksi arsitektur klien (option 93: x64 UEFI = 7/9,
    HTTP boot = 16) dan vendor class.
@@ -357,7 +355,7 @@ Kerjakan Tahap 4: nb-boot.
 ### Tahap 5 — Pipeline Image Windows & "Image Doctor"
 
 ```text
-Kerjakan Tahap 5: nb-image + wizard di console.
+Kerjakan Tahap 5: srb-image + wizard di console.
 1. Wizard "Buat Image Master": dari PC referensi (upload disk via agent) atau dari instalasi
    baru di VM. Partisi GPT: ESP (FAT32), MSR, Windows (NTFS). Tanpa recovery partition di image.
 2. Persiapan image yang dilakukan otomatis (dengan konfirmasi & log):
@@ -415,11 +413,11 @@ Kerjakan Tahap 6.
 
 ---
 
-### Tahap 7 — Client Agent (NusaBoot-Client.exe)
+### Tahap 7 — Client Agent (SupeRioRzBoot-Client.exe)
 
 ```text
 Kerjakan Tahap 7: apps/client-agent.
-1. Satu binary NusaBoot-Client.exe dengan mode: `install` (dipanggil dari image saat Super User),
+1. Satu binary SupeRioRzBoot-Client.exe dengan mode: `install` (dipanggil dari image saat Super User),
    `service` (Windows service SYSTEM), `session-helper` (diluncurkan per sesi user via
    WTSQueryUserToken/CreateProcessAsUser untuk tray, indikator, capture, input).
 2. Enrollment mTLS ke server, auto-discovery server (DHCP option/iBFT/broadcast terautentikasi),
@@ -445,7 +443,7 @@ Kerjakan Tahap 7: apps/client-agent.
 ### Tahap 8 — Monitoring Klien (bisa dicentang tampil/tidak)
 
 ```text
-Kerjakan Tahap 8: nb-telemetry + kolektor di agent + UI.
+Kerjakan Tahap 8: srb-telemetry + kolektor di agent + UI.
 1. Metrik (setiap metrik punya ID, satuan, sumber, interval default, dan flag privasi):
    - CPU: usage total & per core, clock, suhu (hanya dari sumber aman sesuai ADR; else "N/A").
    - RAM: terpakai/total, commit, top proses by RAM.
@@ -480,7 +478,7 @@ Kerjakan Tahap 8: nb-telemetry + kolektor di agent + UI.
 ### Tahap 9 — Remote View & Remote Control
 
 ```text
-Kerjakan Tahap 9: nb-remote + session-helper + viewer di console.
+Kerjakan Tahap 9: srb-remote + session-helper + viewer di console.
 1. Mode: (a) Wall View — thumbnail semua klien (fps rendah, adaptif), (b) View-only,
    (c) Control (keyboard/mouse), (d) Control Super User (lihat Tahap 10).
 2. Capture: Windows.Graphics.Capture / DXGI Desktop Duplication, multi-monitor, cursor terpisah.
@@ -604,18 +602,18 @@ Kerjakan Tahap 13: packaging rilis final via xtask + GitHub Actions (windows-lat
 1. Build release x86_64-pc-windows-msvc, CRT statis, LTO, strip, versi dari git tag (semver),
    resource versi/ikon/manifest (requestedExecutionLevel sesuai mode; manifest DPI-aware,
    Windows 11 supportedOS).
-2. NusaBoot-Server.exe = Tauri console + binary service tertanam (subcommand service),
+2. SupeRioRzBoot-Server.exe = Tauri console + binary service tertanam (subcommand service),
    aset boot signed (shim/iPXE) tertanam ber-hash dan diekstrak saat install ke
-   %ProgramData%\NusaBoot\boot dengan verifikasi tanda tangan.
+   %ProgramData%\SupeRioRzBoot\boot dengan verifikasi tanda tangan.
    Perilaku: double-click -> jika service belum ada, wizard install (UAC) -> console.
-3. NusaBoot-Client.exe = agent + session-helper. Perilaku: double-click di dalam image saat
+3. SupeRioRzBoot-Client.exe = agent + session-helper. Perilaku: double-click di dalam image saat
    Super User -> install service + pairing ke server (scan QR/token) -> selesai.
 4. Code signing Authenticode untuk kedua exe (sertifikat code signing organisasi, timestamp
    RFC 3161). Jika belum ada sertifikat, build tetap jalan tetapi beri peringatan bahwa
    SmartScreen/Smart App Control dapat memblok binary tidak bertanda tangan.
-5. Isi arsip NusaBoot-v<versi>-win-x64.zip:
-     NusaBoot-Server.exe
-     NusaBoot-Client.exe
+5. Isi arsip SupeRioRzBoot-v<versi>-win-x64.zip:
+     SupeRioRzBoot-Server.exe
+     SupeRioRzBoot-Client.exe
      README-QUICKSTART.md (ID + EN, langkah 1-10 dari nol sampai klien boot)
      THIRD-PARTY-NOTICES.txt (termasuk iPXE/shim GPL + source offer)
      LICENSE.txt
