@@ -185,7 +185,7 @@ bukan perkiraan). 4) Gerbang lulus: centang per item, sertakan bukti. 5) Risiko 
 |---|---|
 | Secure Boot | Rantai penuh bertanda tangan Microsoft, tanpa inject sertifikat; deteksi CA 2011/2023 & DBX otomatis |
 | Keamanan Windows | VBS, HVCI (Memory Integrity), TPM 2.0, Credential Guard, LSA Protection tetap ON di image |
-| Anti-cheat | Lingkungan sah untuk Vanguard, EAC, BattlEye, FACEIT, ACE, Javelin — dengan matriks uji |
+| Anti-cheat | Lingkungan sah untuk Vanguard, EAC, BattlEye, FACEIT, ACE, Javelin — dengan matriks uji; semua "Recommended Security Features" FACEIT hijau (Secure Boot, IOMMU, TPM 2.0, TPM Attestation, HVCI, Windows Security Updates) |
 | GPU | Satu VHDX untuk NVIDIA + AMD (+ iGPU Intel opsional), profil hardware per tipe PC |
 | Disk & Cache | Disk Manager manual: Image Disk, Game Disk, Writeback Disk, SSD Cache; RAM cache per pool diatur sendiri (GB) |
 | Image | Image Manager lengkap: ukuran, format, cache, boot, disk tambahan, akses, revisi — semua bisa diedit |
@@ -223,9 +223,23 @@ Verifikasi dan dokumentasikan dengan sumber resmi + uji nyata:
 4. Status transisi sertifikat Secure Boot 2011 -> 2023 per tanggal hari ini: apa yang terjadi
    pada PC yang db-nya hanya berisi CA 2011 vs 2023, binary mana yang harus disajikan, dan cara
    membaca variabel db/dbx/KEK dari Windows (Get-SecureBootUEFI) untuk deteksi otomatis.
-5. Valorant/Vanguard di Windows 11 yang boot via iSCSI: persyaratan (Secure Boot, TPM 2.0,
-   VBS/HVCI kompatibel), error yang muncul (mis. VAN 9001/9003) dan penyebabnya. Lakukan uji
-   nyata. Catat batasan yang tidak bisa diatasi.
+5. Valorant/Vanguard dan FACEIT AC di Windows 11 yang boot via iSCSI.
+   Bukti lapangan: solusi diskless iSCSI komersial sudah terbukti menjalankan Valorant (lobby)
+   dan FACEIT AC dengan status "Recommended Security Features" FACEIT semuanya hijau:
+   Secure Boot, IOMMU, TPM 2.0, TPM Attestation, HVCI, Windows Security Updates. Jadi
+   arsitektur iSCSI + Secure Boot + HVCI LAYAK; tugas spike ini MEREPRODUKSI hasil itu dengan
+   stack kita (bukan membuktikan dari nol), lalu menguji sampai match penuh, bukan hanya lobby.
+   - Catat cara membaca tiap syarat dari Windows (untuk dilaporkan agent):
+     IOMMU/Kernel DMA Protection (Win32_DeviceGuard AvailableSecurityProperties, msinfo32),
+     TPM attestation readiness (tpmtool getdeviceinformation, Win32_Tpm, EK certificate),
+     Measured Boot log valid (rantai shim/iPXE/bootmgr harus ter-measure ke PCR dengan benar),
+     tanggal/level patch keamanan Windows terakhir.
+   - Catat error yang muncul (mis. VAN 9001/9003, pesan FACEIT) dan penyebabnya.
+   - Uji pada Windows 11 resmi (bukan build modifikasi), dan catat batasan yang tidak bisa diatasi.
+11. Identitas disk iSCSI & HWID anti-cheat: anti-cheat memakai serial/ID disk sebagai bagian
+    HWID. Bandingkan (a) serial disk sama untuk semua klien vs (b) serial unik & stabil per
+    klien per LUN (VPD 0x80/0x83 diturunkan dari ClientId). Ukur dampak ke enumerasi PnP & waktu
+    boot, dan risiko "satu klien kena ban HWID -> semua PC ikut". Putuskan default di ADR.
 6. Personalisasi per-klien (hostname, IP statis opsional, dsb.): bandingkan (a) layer
    personalisasi per-klien yang dibuat server dengan mount VHDX + offline registry (offreg.dll)
    vs (b) set via agent saat boot. Ukur kebutuhan reboot dan waktu.
@@ -240,7 +254,7 @@ Verifikasi dan dokumentasikan dengan sumber resmi + uji nyata:
     WHQL, HVCI) dan putuskan: dikerjakan, ditunda, atau tidak. Ukur juga overhead RAM cache
     server per GB (metadata) untuk ditampilkan jujur di Disk Manager.
 
-Output: ADR-0001..ADR-0010, tabel "asumsi -> terbukti/gagal -> keputusan", dan daftar perubahan
+Output: ADR-0001..ADR-0011, tabel "asumsi -> terbukti/gagal -> keputusan", dan daftar perubahan
 yang perlu diterapkan ke rencana tahap 1-13.
 ```
 
@@ -443,6 +457,12 @@ Kerjakan Tahap 3: srb-iscsi (RFC 7143).
    MODE SENSE 6/10, REPORT LUNS, TEST UNIT READY, UNMAP (opsional), PERSISTENT RESERVE (stub).
 3. Identitas klien: mapping initiator IQN + MAC + IP -> ClientId -> rantai layer miliknya.
    Multi-LUN per target: LUN0 OS, LUN1 game disk, LUN2 data (opsional).
+   Identitas SCSI per LUN bisa diatur admin (default sesuai ADR Tahap 0):
+   - INQUIRY vendor (8 karakter), product (16 karakter), revision — inilah nama yang muncul di
+     Device Manager klien, mis. "SRBoot  Image Disk" / "SRBoot  Game Disk".
+   - Serial (VPD 0x80) & device identifier (VPD 0x83, NAA/EUI-64): mode "unik & stabil per
+     klien" (diturunkan dari ClientId + LUN) atau "sama untuk semua klien". Nilai harus stabil
+     antar reboot agar Windows tidak menganggapnya disk baru.
 4. Performa: zero-copy semaksimal mungkin, satu task per koneksi, batching, TCP_NODELAY,
    dukungan jumbo frame, multi-NIC binding, RSS-friendly. Target >= 110 MB/s per klien 1GbE dan
    skala linier sampai saturasi NIC server 10/25GbE.
@@ -519,7 +539,9 @@ Kerjakan Tahap 5: srb-image + wizard di console.
 3. "Image Doctor": pemeriksaan otomatis dan laporan merah/kuning/hijau:
    driver tidak kompatibel HVCI, driver di blocklist, layanan yang memblok anti-cheat, BCD
    salah, bootmgr dicabut DBX, ruang kosong, ukuran writeback rata-rata, Windows activation
-   status. Tiap temuan punya tombol "Perbaiki" bila aman otomatis, atau panduan manual.
+   status, umur patch keamanan Windows (tanggal update kumulatif terakhir; ambang hari bisa
+   diatur — FACEIT memeriksa "Windows Security Updates"), Measured Boot/TPM attestation siap.
+   Tiap temuan punya tombol "Perbaiki" bila aman otomatis, atau panduan manual.
 4. Personalisasi per-klien sesuai ADR Tahap 0 (mis. layer personalisasi dengan offline
    registry): hostname, IP statis opsional, resolusi default, wallpaper/branding, autologin
    akun lokal terbatas, pesan selamat datang — tiap item bisa diaktifkan/nonaktifkan.
@@ -632,7 +654,9 @@ Kerjakan Tahap 7: apps/client-agent.
    (whitelist yang ditandatangani server, bukan perintah bebas), lock/unlock layar,
    set mode Super User, kumpulkan diagnostik.
 4. Laporan keamanan saat boot: Secure Boot state, isi db/dbx (CA 2011/2023, versi DBX),
-   TPM, VBS/HVCI/Credential Guard status, blocklist, Defender, status layanan anti-cheat.
+   TPM, VBS/HVCI/Credential Guard status, blocklist, Defender, status layanan anti-cheat,
+   IOMMU/Kernel DMA Protection, TPM attestation readiness (EK cert, Measured Boot log),
+   level patch keamanan Windows, dan serial disk iSCSI yang terlihat oleh Windows.
 5. Footprint: RAM < 40 MB, CPU idle < 0.5%, tidak mengganggu game (prioritas rendah,
    tanpa hook ke proses game, tanpa injeksi DLL).
 6. Tamper resistance yang sah: service protected via ACL, restart otomatis, integritas binary
@@ -658,7 +682,8 @@ Kerjakan Tahap 8: srb-telemetry + kolektor di agent + UI.
    - Network: throughput, ping/latensi ke server, packet loss.
    - Sesi: user login, uptime, aplikasi aktif (foreground window + daftar proses dengan CPU/RAM),
      game terdeteksi + durasi main, FPS (opsional via PresentMon/ETW).
-   - Keamanan: Secure Boot, TPM, VBS/HVCI, status anti-cheat, Defender.
+   - Keamanan: Secure Boot, IOMMU, TPM 2.0, TPM Attestation, VBS/HVCI, Windows Security
+     Updates (umur patch), status anti-cheat (Vanguard/FACEIT/dll.), Defender.
 2. Pengaturan centang dua level dan per grup klien:
    [x] Kumpulkan (bila mati -> agent tidak mengumpulkan sama sekali, hemat & privasi)
    [x] Tampilkan (kolom/kartu di dashboard)
@@ -771,7 +796,7 @@ Kerjakan Tahap 11: penyempurnaan penuh console (ui/ + apps/server-console).
    klien -> restart/shutdown/pesan/Super User), keyboard shortcut, empty state yang mengarahkan,
    toast & undo, konfirmasi berlapis untuk aksi destruktif, status realtime tanpa refresh.
 4. Dashboard: jumlah klien online/offline, throughput server, hit-rate cache, alert aktif,
-   status Secure Boot/HVCI agregat (mis. "47/48 klien siap Valorant"), revisi aktif per image.
+   status Secure Boot/HVCI agregat (mis. "47/48 klien siap Valorant & FACEIT"), revisi aktif per image.
 5. Performa UI: list tervirtualisasi (500+ klien), update batch per frame, bundle kecil,
    startup console < 1.5 detik.
 6. Aksesibilitas WCAG 2.2 AA: kontras, fokus keyboard, label ARIA, target klik >= 24px.
@@ -800,7 +825,9 @@ Kerjakan Tahap 12.
    bertahan/pulih), disk server hampir penuh, NIC server flap.
 4. Matriks kompatibilitas (hasil nyata, bukan klaim): Valorant (Vanguard), CS2 + FACEIT AC,
    Fortnite (EAC), PUBG (BattlEye), Apex (EAC), Delta Force (ACE), EA FC (Javelin), Genshin,
-   Mobile Legends emulator (opsional) — kolom: Secure Boot, HVCI, berjalan?, catatan error.
+   Mobile Legends emulator (opsional) — kolom: Secure Boot, IOMMU, TPM Attestation, HVCI,
+   lobby OK?, match penuh OK?, catatan error. Untuk FACEIT: screenshot panel "Recommended
+   Security Features" dengan keenam item hijau sebagai bukti.
 5. Uji hardware: minimal 2 merek motherboard, NVIDIA & AMD GPU, NIC Intel & Realtek,
    firmware dengan db CA 2011 saja vs sudah 2023.
 6. Perbaiki semua temuan kritis/tinggi; dokumentasikan yang tersisa.
@@ -879,16 +906,23 @@ menyarankan mematikan Secure Boot/HVCI sebagai "solusi" — itu hanya boleh dise
 langkah diagnosis sementara dengan peringatan jelas.
 ```
 
-### C.3 Checklist Kesiapan "Valorant-Ready" per Klien (ditampilkan di UI)
+### C.3 Checklist Kesiapan "Valorant & FACEIT-Ready" per Klien (ditampilkan di UI)
 
-- [ ] Firmware mode UEFI (bukan CSM/Legacy)
+Enam item pertama sengaja disamakan dengan panel "Recommended Security Features" FACEIT,
+supaya admin bisa mencocokkan langsung.
+
 - [ ] Secure Boot: On (dibaca dari Windows, bukan dari pengaturan server)
+- [ ] IOMMU: VT-d / AMD-Vi aktif di BIOS dan Kernel DMA Protection On
 - [ ] TPM 2.0: Present & Ready
-- [ ] VBS: Running; HVCI (Memory Integrity): Running
+- [ ] TPM Attestation: siap (EK certificate ada, Measured Boot log valid)
+- [ ] HVCI (Memory Integrity): Running (VBS Running)
+- [ ] Windows Security Updates: image sudah berisi update keamanan terbaru (umur patch di bawah ambang yang diatur admin)
+- [ ] Firmware mode UEFI (bukan CSM/Legacy)
 - [ ] Tidak ada driver dari Vulnerable Driver Blocklist yang termuat
 - [ ] Binary boot sesuai db klien (CA 2011/2023) dan tidak dicabut DBX
 - [ ] Layanan anti-cheat terpasang & dapat start
 - [ ] Waktu sistem sinkron (NTP) — sertifikat & anti-cheat sensitif terhadap jam
+- [ ] Serial disk iSCSI sesuai kebijakan ADR (unik per klien bila dipilih) agar HWID antar PC tidak sama
 
 ### C.4 Glosarium Singkat
 
